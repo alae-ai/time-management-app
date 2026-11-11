@@ -5,9 +5,18 @@ from __future__ import annotations
 import sqlite3
 import uuid
 
-from tm.dates import fmt_time, now_iso, parse_time_min
+from tm.dates import (
+    ceil_to_grid,
+    fmt_time,
+    now_iso,
+    now_minutes,
+    parse_date,
+    parse_time_min,
+    today,
+)
 from tm.errors import AppError, bad_request, not_found
 from tm.models import BlockCreate, BlockUpdate, SessionCreate
+from tm.services.settings import get_settings
 from tm.services.tasks import get_task
 
 BLOCK_SELECT = """
@@ -65,6 +74,46 @@ def _span(start_min: int | None, end_min: int | None) -> tuple[int, int]:
     return start_min, end_min
 
 
+def _validate_block_time(
+    conn: sqlite3.Connection,
+    date: str,
+    start_min: int | None,
+    end_min: int | None,
+) -> None:
+    """Reject timed blocks that are in the past or outside the schedulable window.
+
+    All-day blocks are day-level markers: they may be added for today even though part
+    of the day has passed, but never for a past date.
+    """
+    settings = get_settings(conn)
+    block_date = parse_date(date)
+    today_date = today()
+    if block_date < today_date:
+        raise bad_request("Cannot schedule an appointment or session on a past date.")
+
+    if start_min is None and end_min is None:
+        return
+
+    window_start = parse_time_min(settings.day_start)
+    window_end = parse_time_min(settings.day_end, allow_end_of_day=True)
+    if start_min < window_start or end_min > window_end:
+        raise bad_request(
+            "Appointments and sessions must be scheduled between "
+            f"{settings.day_start} and {settings.day_end}."
+        )
+
+    if block_date == today_date:
+        earliest = max(
+            window_start,
+            ceil_to_grid(now_minutes(), settings.granularity_min),
+        )
+        if start_min < earliest:
+            raise bad_request(
+                "That time has already passed. "
+                f"The next schedulable start is {fmt_time(earliest)}."
+            )
+
+
 def find_conflicts(
     conn: sqlite3.Connection,
     date: str,
@@ -104,6 +153,8 @@ def _insert_block(
     notes: str,
     allow_overlap: bool,
 ) -> dict:
+    _validate_block_time(conn, date, start_min, end_min)
+
     conflicts = find_conflicts(conn, date, start_min, end_min)
     if conflicts and not allow_overlap:
         raise AppError(
@@ -217,16 +268,21 @@ def update_block(conn: sqlite3.Connection, block_id: str, data: BlockUpdate) -> 
         if start_min >= end_min:
             raise bad_request("start must be before end")
 
-    conflicts = find_conflicts(
-        conn, date, start_min, end_min, exclude_block_id=block_id
+    schedule_changed = (
+        date != row["date"] or start != existing_start or end != existing_end
     )
-    if conflicts and not data.allow_overlap:
-        raise AppError(
-            409,
-            "conflict",
-            "This slot overlaps existing blocks. Choose another slot or pass allow_overlap.",
-            conflicts,
+    if schedule_changed:
+        _validate_block_time(conn, date, start_min, end_min)
+        conflicts = find_conflicts(
+            conn, date, start_min, end_min, exclude_block_id=block_id
         )
+        if conflicts and not data.allow_overlap:
+            raise AppError(
+                409,
+                "conflict",
+                "This slot overlaps existing blocks. Choose another slot or pass allow_overlap.",
+                conflicts,
+            )
 
     with conn:
         conn.execute(

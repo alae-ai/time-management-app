@@ -9,11 +9,14 @@ import { SettingsModal } from "./components/SettingsModal";
 import { TaskModal } from "./components/TaskModal";
 import {
   addDays,
+  ceilToGrid,
   isSameMonth,
+  minutesToTime,
   monthLabel,
   parseIso,
   startOfMonth,
   startOfWeek,
+  timeToMinutes,
   toIso,
   todayIso,
 } from "./date";
@@ -262,6 +265,45 @@ export default function App() {
   }
 
   const today = state.today;
+  const slotsForSelected =
+    daySlots && daySlots.from === selected && daySlots.to === selected
+      ? daySlots.slots
+      : [];
+  const firstFreeSlot = slotsForSelected[0];
+
+  function blockDefaults(): { start: string; end: string } {
+    const now = new Date();
+    const dayStart = timeToMinutes(settings.day_start);
+    const dayEnd = timeToMinutes(settings.day_end);
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const earliest =
+      selected === today
+        ? Math.max(dayStart, ceilToGrid(nowMinutes, settings.granularity_min))
+        : dayStart;
+
+    if (firstFreeSlot) {
+      const slotStart = Math.max(earliest, timeToMinutes(firstFreeSlot.start));
+      const slotEnd = timeToMinutes(firstFreeSlot.end);
+      if (slotEnd > slotStart) {
+        const endMinutes = Math.min(slotStart + 60, slotEnd);
+        return { start: minutesToTime(slotStart), end: minutesToTime(endMinutes) };
+      }
+    }
+
+    const startMinutes = Math.min(earliest, Math.max(dayStart, dayEnd - 30));
+    const endMinutes = Math.min(startMinutes + 60, dayEnd);
+    return { start: minutesToTime(startMinutes), end: minutesToTime(endMinutes) };
+  }
+
+  function openBlockCreate(kind: "appointment" | "session") {
+    if (selected < today) {
+      setToast({ kind: "error", text: "Cannot schedule a block on a past date." });
+      return;
+    }
+    setModal({ type: `${kind}-create`, date: selected });
+  }
+
+  const defaultBlockTimes = blockDefaults();
   const dayBlocks = state.blocks.filter((block) => block.date === selected);
   const backlogTasks = state.tasks.filter((task) => !task.deadline);
   const openTasks = state.tasks.filter((task) => !task.done);
@@ -377,10 +419,8 @@ export default function App() {
             onEditBlock={(block) => setModal({ type: "block-edit", block })}
             onToggleTask={(task) => void handleToggleTask(task)}
             onCreateTask={() => setModal({ type: "task-create", date: selected })}
-            onCreateAppointment={() =>
-              setModal({ type: "appointment-create", date: selected })
-            }
-            onCreateSession={() => setModal({ type: "session-create", date: selected })}
+            onCreateAppointment={() => openBlockCreate("appointment")}
+            onCreateSession={() => openBlockCreate("session")}
           />
 
           <Backlog
@@ -416,6 +456,8 @@ export default function App() {
         <BlockModal
           kind="appointment"
           defaultDate={modal.date}
+          defaultStart={defaultBlockTimes.start}
+          defaultEnd={defaultBlockTimes.end}
           tasks={openTasks}
           onClose={() => setModal(null)}
           onSaved={handleBlockSaved}
@@ -427,6 +469,8 @@ export default function App() {
         <BlockModal
           kind="session"
           defaultDate={modal.date}
+          defaultStart={defaultBlockTimes.start}
+          defaultEnd={defaultBlockTimes.end}
           tasks={openTasks}
           onClose={() => setModal(null)}
           onSaved={handleBlockSaved}

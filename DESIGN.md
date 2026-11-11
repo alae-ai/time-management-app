@@ -233,11 +233,17 @@ Semantics:
 - Chronological order; cap at 50 slots; range capped at 366 days.
 - No slot fits ⇒ say so; never silently return a shorter slot.
 
-Write-time conflict check (same transaction as the insert/update):
+Write-time checks (before the insert/update transaction):
 
+- Timed blocks must be on or after today, inside the configured day window, and on
+  today start at or after `now` rounded up to the granularity. Past dates are rejected.
+- All-day blocks are day-level markers: they are allowed today or in the future, but not
+  on a past date.
 - Same date and `new.start < old.end && new.end > old.start`; all-day overlaps all.
 - `409` with the conflicting blocks; `allow_overlap=true` is an explicit override and the
   agent must ask the user first.
+- Edits that do not change date or time (title/notes) remain possible for historical
+  blocks; moving a block into the past is rejected.
 
 ---
 

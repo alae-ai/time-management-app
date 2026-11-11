@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import date, timedelta
 
 from tm.dates import today
 
@@ -152,6 +152,121 @@ def test_all_day_session(client, future_day):
         params={"from": future_day.isoformat(), "to": future_day.isoformat()},
     ).json()
     assert slots["slots"] == []
+
+
+def test_session_cannot_start_in_the_past_today(client, monkeypatch):
+    from tm.services import blocks
+
+    fixed_today = date(2026, 11, 11)
+    monkeypatch.setattr(blocks, "today", lambda: fixed_today)
+    monkeypatch.setattr(blocks, "now_minutes", lambda: 10 * 60)
+
+    task = client.post("/api/tasks", json={"title": "Past work"}).json()
+    rejected = client.post(
+        f"/api/tasks/{task['id']}/sessions",
+        json={
+            "date": fixed_today.isoformat(),
+            "start": "09:00",
+            "end": "10:00",
+        },
+    )
+    assert rejected.status_code == 400
+    assert "already passed" in rejected.json()["error"]["message"]
+    assert "10:00" in rejected.json()["error"]["message"]
+
+    accepted = client.post(
+        f"/api/tasks/{task['id']}/sessions",
+        json={
+            "date": fixed_today.isoformat(),
+            "start": "10:30",
+            "end": "11:30",
+        },
+    )
+    assert accepted.status_code == 201
+
+
+def test_block_cannot_be_scheduled_on_a_past_date(client, monkeypatch):
+    from tm.services import blocks
+
+    fixed_today = date(2026, 11, 11)
+    monkeypatch.setattr(blocks, "today", lambda: fixed_today)
+    past = fixed_today - timedelta(days=1)
+
+    response = client.post(
+        "/api/blocks",
+        json={
+            "title": "Too late",
+            "kind": "appointment",
+            "date": past.isoformat(),
+            "start": "10:00",
+            "end": "11:00",
+        },
+    )
+    assert response.status_code == 400
+    assert "past date" in response.json()["error"]["message"]
+
+
+def test_block_must_fit_inside_day_window(client, future_day):
+    early = client.post(
+        "/api/blocks",
+        json={
+            "title": "Too early",
+            "kind": "appointment",
+            "date": future_day.isoformat(),
+            "start": "07:00",
+            "end": "08:00",
+        },
+    )
+    assert early.status_code == 400
+    assert "between 08:00 and 22:00" in early.json()["error"]["message"]
+
+    late = client.post(
+        "/api/blocks",
+        json={
+            "title": "Too late",
+            "kind": "appointment",
+            "date": future_day.isoformat(),
+            "start": "21:00",
+            "end": "23:00",
+        },
+    )
+    assert late.status_code == 400
+    assert "between 08:00 and 22:00" in late.json()["error"]["message"]
+
+
+def test_editing_notes_on_a_past_block_still_works(client, monkeypatch):
+    from tm.services import blocks
+
+    create_day = date(2026, 11, 1)
+    block_day = date(2026, 11, 11)
+    monkeypatch.setattr(blocks, "today", lambda: create_day)
+
+    block = client.post(
+        "/api/blocks",
+        json={
+            "title": "Historical meeting",
+            "kind": "appointment",
+            "date": block_day.isoformat(),
+            "start": "10:00",
+            "end": "11:00",
+        },
+    ).json()
+
+    monkeypatch.setattr(blocks, "today", lambda: date(2026, 11, 20))
+
+    notes = client.patch(
+        f"/api/blocks/{block['id']}",
+        json={"title": "Historical meeting", "notes": "Minutes attached."},
+    )
+    assert notes.status_code == 200
+    assert notes.json()["notes"] == "Minutes attached."
+
+    moved = client.patch(
+        f"/api/blocks/{block['id']}",
+        json={"start": "11:00", "end": "12:00"},
+    )
+    assert moved.status_code == 400
+    assert "past date" in moved.json()["error"]["message"]
 
 
 def test_conflict_returns_409_and_can_be_forced(client, future_day):

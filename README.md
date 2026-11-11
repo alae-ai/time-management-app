@@ -9,7 +9,7 @@ See [DESIGN.md](DESIGN.md) for the architecture.
 ## What works today
 
 - SQLite store (`data/tm.db`) with tasks, calendar blocks, settings, and chat tables.
-- FastAPI service with validated task/block CRUD and overlap detection.
+- FastAPI service with validated task/block CRUD, past/window checks, and overlap detection.
 - Deterministic free-slot engine: merges overlapping blocks, handles all-day blocks,
   done tasks, buffers, granularity, today's lead time, and a configurable day window.
 - User-editable settings (window, week start, granularity, buffer) persisted in SQLite.

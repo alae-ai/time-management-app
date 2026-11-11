@@ -76,6 +76,18 @@ export function timeToMinutes(time: string): number {
   return hours * 60 + minutes;
 }
 
+export function minutesToTime(minutes: number): string {
+  const safe = Math.max(0, Math.min(24 * 60, Math.round(minutes)));
+  return `${pad(Math.floor(safe / 60))}:${pad(safe % 60)}`;
+}
+
+export function ceilToGrid(minutes: number, grid: number): number {
+  if (grid <= 0) {
+    return minutes;
+  }
+  return Math.ceil(minutes / grid) * grid;
+}
+
 export function durationLabel(minutes: number): string {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;

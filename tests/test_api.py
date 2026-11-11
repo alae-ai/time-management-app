@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
 from tm.dates import today
@@ -24,6 +25,18 @@ def test_health(client):
     data = response.json()
     assert data["ok"] is True
     assert data["llm_configured"] is False
+
+
+def test_concurrent_state_requests_use_per_request_connections(client):
+    """Regression: SQLite connections may be used from a different threadpool thread."""
+
+    def fetch(_: int) -> int:
+        return client.get("/api/state").status_code
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        statuses = list(pool.map(fetch, range(64)))
+
+    assert statuses == [200] * 64
 
 
 def test_settings_defaults_and_update(client, future_day):

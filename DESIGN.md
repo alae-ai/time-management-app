@@ -1,7 +1,7 @@
 # Time Management App — System Design (v0.2)
 
-> Status: M1 implemented (backend, SQLite, free-slot engine, CLI, tests).
-> M2 (calendar UI) is next. Remaining for M4: LLM base URL/model details.
+> Status: M1–M2 implemented (backend, SQLite, free-slot engine, CLI, calendar UI, tests).
+> M3 (MCP server + OpenCode workflow) is next. Remaining for M4: LLM base URL/model details.
 
 ## 1. Goal
 
@@ -500,9 +500,9 @@ Run: `scripts/dev.sh` starts Uvicorn + Vite; production `npm run build` and Fast
 
 ## 12. Milestones
 
-1. **M1 — Core**: schema/migrations, service layer, free-slot engine + tests, seed, CLI.
+1. **M1 — Core**: schema/migrations, service layer, free-slot engine + tests, seed, CLI. ✅
 2. **M2 — Calendar UI**: month grid, deadline styling, checkbox, day panel with gaps, CRUD,
-   settings modal (window, week start, granularity, buffer).
+   settings modal (window, week start, granularity, buffer). ✅
 3. **M3 — OpenCode agent**: MCP server, `opencode.jsonc`, shared prompt, end-to-end
    scenarios (create task → slots → schedule → done) through both CLI and MCP.
 4. **M4 — In-app chat**: provider client, agent loop, SSE, history persistence, slot cards.
@@ -518,4 +518,4 @@ M1–M3 deliver the full chat-with-OpenCode flow. M4 adds the standalone chat pa
    The API key goes in `.env`; I will not ask for it in chat.
 2. In-app chat panel default: visible but disabled with a setup hint until
    `TM_LLM_API_KEY` / `TM_LLM_BASE_URL` / `TM_LLM_MODEL` are set. Assumed unless changed.
-3. Nothing else blocks M1.
+3. Nothing else blocks M3.

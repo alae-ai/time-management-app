@@ -1,7 +1,8 @@
 # Time Management App
 
 Local-first calendar and natural-language time planner. The backend, storage, free-slot
-engine, settings, and CLI are implemented (milestone M1). The calendar UI comes next.
+engine, settings, CLI, and the calendar UI are implemented (milestones M1–M2). The MCP
+server and in-app chat come next.
 
 See [DESIGN.md](DESIGN.md) for the architecture.
 
@@ -12,6 +13,8 @@ See [DESIGN.md](DESIGN.md) for the architecture.
 - Deterministic free-slot engine: merges overlapping blocks, handles all-day blocks,
   done tasks, buffers, granularity, today's lead time, and a configurable day window.
 - User-editable settings (window, week start, granularity, buffer) persisted in SQLite.
+- React month calendar with deadline-day highlighting, task checkboxes, appointments,
+  work sessions, filters, a day panel with live free gaps, and a backlog.
 - `tm` CLI for health checks, schedule inspection, task management, scheduling, and
   free-slot queries.
 - Test suite covering the slot engine and the HTTP API.
@@ -23,6 +26,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # optional; the defaults work
+cd web && npm install && cd ..
 ```
 
 If you prefer not to activate, prefix commands with `.venv/bin/` (for example
@@ -31,14 +35,26 @@ If you prefer not to activate, prefix commands with `.venv/bin/` (for example
 ## Run
 
 ```bash
-.venv/bin/tm serve
-# or
 scripts/dev.sh
+# or, API only / production bundle:
+.venv/bin/tm serve
 ```
 
+`scripts/dev.sh` starts the API and the Vite dev server together. It reuses an API that
+is already running on port 4317.
+
+- App (dev): <http://127.0.0.1:5173>
+- App (built): <http://127.0.0.1:4317>
 - API: <http://127.0.0.1:4317>
 - Interactive docs: <http://127.0.0.1:4317/docs>
 - Demo data: `.venv/bin/python -m tm.seed` (or `--reset`)
+
+`tm serve` serves the built frontend from `web/dist` when it exists. Rebuild it after
+frontend changes:
+
+```bash
+cd web && npm run build
+```
 
 ## CLI
 
@@ -79,11 +95,25 @@ The CLI talks to the API over HTTP. The server must be running; `tm health` chec
 Free slots accept `from`, `to`, `min`, and optional `day_start`, `day_end`,
 `granularity`, `buffer`, `include_done`.
 
+## Frontend
+
+```bash
+cd web
+npm install
+npm run dev      # http://127.0.0.1:5173, proxies /api to :4317
+npm run build    # type-check and write web/dist
+```
+
+The UI polls `/api/state` every five seconds and on window focus. Changes made through
+the UI use the same REST endpoints as the CLI, so the calendar, CLI, and chat all see
+the same data.
+
 ## Tests
 
 ```bash
 .venv/bin/pytest
 .venv/bin/ruff check tm tests
+cd web && npm run build
 ```
 
 ## Data
@@ -94,8 +124,6 @@ Free slots accept `from`, `to`, `min`, and optional `day_start`, `day_end`,
 
 ## Roadmap
 
-- **M2**: React month grid, deadline-day highlighting, checkbox, day panel with free gaps,
-  settings modal.
 - **M3**: MCP server + OpenCode workflow.
 - **M4**: in-app chat panel (OpenAI-compatible provider).
 - **M5**: backups/export polish.

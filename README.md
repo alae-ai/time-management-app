@@ -56,6 +56,23 @@ frontend changes:
 cd web && npm run build
 ```
 
+## Docker / Dokploy
+
+A multi-stage `Dockerfile` builds the UI and serves it from the Python container.
+`docker-compose.yml` is ready for Dokploy, with SQLite in the `tm_data` volume.
+
+```bash
+docker compose build
+docker compose up -d
+docker compose exec tm tm health
+```
+
+For the production domain `todo.naoufalelouahabi.com`, timezone, environment variables,
+and the Dokploy domain/volume steps, see [DEPLOY.md](DEPLOY.md).
+
+The app has no built-in authentication, so protect a public deployment with Dokploy /
+Traefik basic auth or another access-control layer.
+
 ## CLI
 
 ```bash

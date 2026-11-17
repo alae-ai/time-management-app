@@ -6,15 +6,15 @@ services:
     restart: unless-stopped
     init: true
     environment:
-      TM_HOST: "${TM_HOST:-0.0.0.0}"
-      TM_PORT: "${TM_PORT:-4317}"
-      TM_DATA_DIR: "${TM_DATA_DIR:-/app/data}"
-      TM_DB_PATH: "${TM_DB_PATH:-/app/data/tm.db}"
-      TM_API_URL: "${TM_API_URL:-http://127.0.0.1:4317}"
-      TZ: "${TZ:-UTC}"
-      TM_LLM_BASE_URL: "${TM_LLM_BASE_URL:-}"
-      TM_LLM_API_KEY: "${TM_LLM_API_KEY:-}"
-      TM_LLM_MODEL: "${TM_LLM_MODEL:-}"
+      - TM_HOST
+      - TM_PORT
+      - TM_DATA_DIR
+      - TM_DB_PATH
+      - TM_API_URL
+      - TZ
+      - TM_LLM_BASE_URL
+      - TM_LLM_API_KEY
+      - TM_LLM_MODEL
     expose:
       - "4317"
     volumes:

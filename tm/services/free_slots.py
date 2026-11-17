@@ -1,4 +1,4 @@
-"""Deterministic free-slot computation."""
+"""Deterministic free-slot computation, scoped to one user."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ def _as_minutes(value: str | int, *, end_of_day: bool = False) -> int:
 
 def find_free_slots(
     conn: sqlite3.Connection,
+    user_id: str,
     from_date: str | date,
     to_date: str | date,
     *,
@@ -40,7 +41,7 @@ def find_free_slots(
     now: datetime | None = None,
     max_slots: int = 50,
 ) -> dict:
-    settings = get_settings(conn)
+    settings = get_settings(conn, user_id)
     start_min = (
         _as_minutes(day_start) if day_start is not None else parse_time_min(settings.day_start)
     )
@@ -75,11 +76,11 @@ def find_free_slots(
         """
         SELECT b.date, b.start_min, b.end_min, b.task_id, t.done AS task_done
         FROM blocks b
-        LEFT JOIN tasks t ON t.id = b.task_id
-        WHERE b.date BETWEEN ? AND ?
+        LEFT JOIN tasks t ON t.id = b.task_id AND t.user_id = b.user_id
+        WHERE b.user_id = ? AND b.date BETWEEN ? AND ?
         ORDER BY b.date, COALESCE(b.start_min, -1)
         """,
-        (start_date.isoformat(), end_date.isoformat()),
+        (user_id, start_date.isoformat(), end_date.isoformat()),
     ).fetchall()
 
     by_date: dict[str, list[sqlite3.Row]] = {}

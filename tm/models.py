@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -331,3 +332,152 @@ class FreeSlotsOut(BaseModel):
     min_minutes: int
     slots: list[Slot]
     truncated: bool = False
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _clean_email(value: str) -> str:
+    value = value.strip().lower()
+    if len(value) > 320 or not _EMAIL_RE.fullmatch(value):
+        raise ValueError("enter a valid email address")
+    return value
+
+
+def _clean_password(value: str) -> str:
+    if len(value) < 10:
+        raise ValueError("password must be at least 10 characters")
+    if len(value) > 1024:
+        raise ValueError("password is too long")
+    return value
+
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    name: str
+    is_admin: bool
+    is_active: bool
+    created_at: str
+    updated_at: str
+    last_login_at: str | None = None
+
+
+class AuthSession(BaseModel):
+    authenticated: bool
+    setup_required: bool
+    user: UserOut | None = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, value: str) -> str:
+        return _clean_email(value)
+
+
+class SetupRequest(BaseModel):
+    email: str
+    name: str = ""
+    password: str
+    setup_token: str | None = None
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, value: str) -> str:
+        return _clean_email(value)
+
+    @field_validator("password")
+    @classmethod
+    def _password(cls, value: str) -> str:
+        return _clean_password(value)
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        return value.strip()
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _new_password(cls, value: str) -> str:
+        return _clean_password(value)
+
+
+class TokenCreate(BaseModel):
+    name: str = "API token"
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("token name must not be empty")
+        return value[:80]
+
+
+class TokenOut(BaseModel):
+    id: str
+    name: str
+    created_at: str
+    last_used_at: str | None
+    expires_at: str | None
+
+
+class TokenCreated(TokenOut):
+    token: str
+
+
+class AdminUserCreate(BaseModel):
+    email: str
+    name: str = ""
+    password: str
+    is_admin: bool = False
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, value: str) -> str:
+        return _clean_email(value)
+
+    @field_validator("password")
+    @classmethod
+    def _password(cls, value: str) -> str:
+        return _clean_password(value)
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        return value.strip()
+
+
+class AdminUserUpdate(BaseModel):
+    name: str | None = None
+    is_admin: bool | None = None
+    is_active: bool | None = None
+    password: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("password")
+    @classmethod
+    def _password(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _clean_password(value)
+
+
+class ImportPayload(BaseModel):
+    settings: Settings | None = None
+    tasks: list[TaskOut] = Field(default_factory=list)
+    blocks: list[BlockOut] = Field(default_factory=list)
+    replace: bool = False

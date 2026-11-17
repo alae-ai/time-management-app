@@ -28,6 +28,9 @@ def init_db(db_path: str | Path | None = None) -> None:
     conn = connect(db_path)
     try:
         conn.execute("PRAGMA journal_mode = WAL")
+        # Table rebuilds in migrations need foreign keys disabled. New connections
+        # enable them again in connect().
+        conn.execute("PRAGMA foreign_keys = OFF")
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
             number = int(migration.name.split("_", 1)[0])
@@ -36,9 +39,13 @@ def init_db(db_path: str | Path | None = None) -> None:
             conn.executescript(migration.read_text(encoding="utf-8"))
             conn.execute(f"PRAGMA user_version = {number}")
             conn.commit()
+        conn.execute("PRAGMA foreign_keys = ON")
+
         from tm.services.settings import seed_defaults
 
-        seed_defaults(conn)
+        rows = conn.execute("SELECT id FROM users").fetchall()
+        for row in rows:
+            seed_defaults(conn, row["id"])
     finally:
         conn.close()
 

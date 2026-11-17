@@ -12,8 +12,9 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from tm import __version__
+from tm.api.auth_routes import router as auth_router
 from tm.api.routes import router
-from tm.config import DB_PATH, ROOT
+from tm.config import DB_PATH, PUBLIC_ORIGIN, ROOT
 from tm.db import init_db
 from tm.errors import AppError, validation_details
 
@@ -31,12 +32,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     )
     app.state.db_path = db_path or DB_PATH
 
+    origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+    if PUBLIC_ORIGIN:
+        origins.append(PUBLIC_ORIGIN)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-        ],
+        allow_origins=origins,
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -60,6 +65,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             },
         )
 
+    app.include_router(auth_router, prefix="/api")
     app.include_router(router, prefix="/api")
 
     dist = ROOT / "web" / "dist"

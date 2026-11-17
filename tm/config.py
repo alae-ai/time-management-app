@@ -22,6 +22,17 @@ DB_PATH = _resolve_path(os.getenv("TM_DB_PATH", str(DATA_DIR / "tm.db")))
 HOST = os.getenv("TM_HOST", "127.0.0.1")
 PORT = int(os.getenv("TM_PORT", "4317"))
 API_URL = os.getenv("TM_API_URL", f"http://{HOST}:{PORT}")
+API_TOKEN = os.getenv("TM_API_TOKEN", "").strip()
+
+SESSION_DAYS = max(1, int(os.getenv("TM_SESSION_DAYS", "30")))
+COOKIE_SECURE = os.getenv("TM_COOKIE_SECURE", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SETUP_TOKEN = os.getenv("TM_SETUP_TOKEN", "").strip()
+PUBLIC_ORIGIN = os.getenv("TM_PUBLIC_ORIGIN", "").strip().rstrip("/")
 
 LLM_BASE_URL = os.getenv("TM_LLM_BASE_URL", "").strip()
 LLM_API_KEY = os.getenv("TM_LLM_API_KEY", "").strip()

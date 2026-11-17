@@ -15,6 +15,11 @@ services:
       - TM_LLM_BASE_URL
       - TM_LLM_API_KEY
       - TM_LLM_MODEL
+      - TM_SESSION_DAYS
+      - TM_COOKIE_SECURE
+      - TM_SETUP_TOKEN
+      - TM_PUBLIC_ORIGIN
+      - TM_API_TOKEN
     expose:
       - "4317"
     volumes:
@@ -31,7 +36,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    # Dokploy routes https://todo.naoufalelouahabi.com to this service on port 4317.
+    # Dokploy routes https://calendar.naoufalelouahabi.com to this service on port 4317.
     # Uncomment only for direct local access; Dokploy uses the internal exposed port.
     # ports:
     #   - "4317:4317"

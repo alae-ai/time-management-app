@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, errorMessage } from "./api";
+import { ApiError, api, errorMessage } from "./api";
+import { AdminUsersModal } from "./components/AdminUsersModal";
 import { Backlog } from "./components/Backlog";
 import { BlockModal } from "./components/BlockModal";
 import { DayPanel } from "./components/DayPanel";
+import { LoginScreen } from "./components/LoginScreen";
 import { MonthGrid } from "./components/MonthGrid";
+import { PasswordModal } from "./components/PasswordModal";
 import { SettingsModal } from "./components/SettingsModal";
+import { SetupScreen } from "./components/SetupScreen";
 import { TaskModal } from "./components/TaskModal";
+import { TokensModal } from "./components/TokensModal";
 import {
   addDays,
   ceilToGrid,
@@ -21,12 +26,14 @@ import {
   todayIso,
 } from "./date";
 import type {
+  AuthSession,
   Block,
   FilterMode,
   FreeSlots,
   Settings,
   StateResponse,
   Task,
+  User,
 } from "./types";
 
 const DEFAULT_SETTINGS: Settings = {
@@ -54,7 +61,13 @@ const FILTERS: { mode: FilterMode; label: string }[] = [
   { mode: "appointments", label: "Appointments" },
 ];
 
-export default function App() {
+type CalendarAppProps = {
+  user: User;
+  onLogout: () => void;
+  onSessionExpired: () => void;
+};
+
+function CalendarApp({ user, onLogout, onSessionExpired }: CalendarAppProps) {
   const [state, setState] = useState<StateResponse | null>(null);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [month, setMonth] = useState<Date>(() => startOfMonth(new Date()));
@@ -65,6 +78,9 @@ export default function App() {
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [modal, setModal] = useState<ModalState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [usersOpen, setUsersOpen] = useState(false);
+  const [tokensOpen, setTokensOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const busyRef = useRef(false);
 
@@ -88,9 +104,13 @@ export default function App() {
       setState(data);
       setFatalError(null);
     } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onSessionExpired();
+        return;
+      }
       setFatalError(errorMessage(caught));
     }
-  }, [rangeFrom, rangeTo]);
+  }, [rangeFrom, rangeTo, onSessionExpired]);
 
   useEffect(() => {
     void loadState();
@@ -189,6 +209,15 @@ export default function App() {
     setSettingsOpen(false);
     setState((prev) => (prev ? { ...prev, settings: next } : prev));
     void refreshWithToast("Settings updated.");
+  }
+
+  async function handleLogout() {
+    try {
+      await api.logout();
+    } catch {
+      // The local session is already being discarded; a failed logout is harmless.
+    }
+    onLogout();
   }
 
   async function handleToggleTask(task: Task) {
@@ -368,6 +397,41 @@ export default function App() {
           >
             Settings
           </button>
+          <div className="account">
+            <span className="account-email" title={user.email}>
+              {user.name || user.email}
+            </span>
+            {user.is_admin && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setUsersOpen(true)}
+              >
+                Users
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setTokensOpen(true)}
+            >
+              API tokens
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setPasswordOpen(true)}
+            >
+              Password
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void handleLogout()}
+            >
+              Log out
+            </button>
+          </div>
         </div>
       </header>
 
@@ -498,6 +562,17 @@ export default function App() {
         />
       )}
 
+      {usersOpen && (
+        <AdminUsersModal
+          currentUserId={user.id}
+          onClose={() => setUsersOpen(false)}
+        />
+      )}
+
+      {tokensOpen && <TokensModal onClose={() => setTokensOpen(false)} />}
+
+      {passwordOpen && <PasswordModal onClose={() => setPasswordOpen(false)} />}
+
       {toast && (
         <div
           className={`toast toast-${toast.kind}`}
@@ -516,5 +591,83 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [bootError, setBootError] = useState<string | null>(null);
+
+  const loadSession = useCallback(async () => {
+    setLoading(true);
+    try {
+      setSession(await api.getSession());
+      setBootError(null);
+    } catch (caught) {
+      setBootError(errorMessage(caught));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSession();
+  }, [loadSession]);
+
+  const signedOut = useCallback(() => {
+    setSession({ authenticated: false, setup_required: false, user: null });
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="boot">
+        <div className="boot-card">
+          <div className="brand brand-boot">
+            <span className="brand-mark">▦</span>
+            <span className="brand-name">Time Manager</span>
+          </div>
+          <p>Checking your session…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (bootError) {
+    return (
+      <div className="boot">
+        <div className="boot-card">
+          <div className="brand brand-boot">
+            <span className="brand-mark">▦</span>
+            <span className="brand-name">Time Manager</span>
+          </div>
+          <h1>Cannot reach the API</h1>
+          <p>
+            Start the app with <code>scripts/dev.sh</code> or <code>tm serve</code>,
+            then retry.
+          </p>
+          <pre className="boot-error">{bootError}</pre>
+          <button type="button" className="btn btn-primary" onClick={() => void loadSession()}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (session?.setup_required) {
+    return <SetupScreen onAuthenticated={(next) => setSession(next)} />;
+  }
+
+  if (!session?.authenticated || !session.user) {
+    return <LoginScreen onAuthenticated={(next) => setSession(next)} />;
+  }
+
+  return (
+    <CalendarApp
+      user={session.user}
+      onLogout={signedOut}
+      onSessionExpired={signedOut}
+    />
   );
 }

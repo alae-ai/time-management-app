@@ -1,4 +1,4 @@
-"""Task service."""
+"""Task service, scoped to one user."""
 
 from __future__ import annotations
 
@@ -29,25 +29,29 @@ def _row_to_task(row: sqlite3.Row) -> dict:
     }
 
 
-def _get_row(conn: sqlite3.Connection, task_id: str) -> sqlite3.Row:
-    row = conn.execute(f"{TASK_SELECT} WHERE id = ?", (task_id,)).fetchone()
+def _get_row(conn: sqlite3.Connection, user_id: str, task_id: str) -> sqlite3.Row:
+    row = conn.execute(
+        f"{TASK_SELECT} WHERE id = ? AND user_id = ?",
+        (task_id, user_id),
+    ).fetchone()
     if row is None:
         raise not_found("task", task_id)
     return row
 
 
-def get_task(conn: sqlite3.Connection, task_id: str) -> dict:
-    return _row_to_task(_get_row(conn, task_id))
+def get_task(conn: sqlite3.Connection, user_id: str, task_id: str) -> dict:
+    return _row_to_task(_get_row(conn, user_id, task_id))
 
 
 def list_tasks(
     conn: sqlite3.Connection,
+    user_id: str,
     *,
     status: str = "all",
     project: str | None = None,
 ) -> list[dict]:
-    clauses: list[str] = []
-    params: list[object] = []
+    clauses: list[str] = ["user_id = ?"]
+    params: list[object] = [user_id]
     if status == "open":
         clauses.append("done = 0")
     elif status == "done":
@@ -58,7 +62,7 @@ def list_tasks(
         clauses.append("project = ?")
         params.append(project)
 
-    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    where = f" WHERE {' AND '.join(clauses)}"
     rows = conn.execute(
         f"""
         {TASK_SELECT}{where}
@@ -72,7 +76,7 @@ def list_tasks(
     return [_row_to_task(row) for row in rows]
 
 
-def create_task(conn: sqlite3.Connection, data: TaskCreate) -> dict:
+def create_task(conn: sqlite3.Connection, user_id: str, data: TaskCreate) -> dict:
     now = now_iso()
     task_id = str(uuid.uuid4())
     deadline_min = (
@@ -82,12 +86,13 @@ def create_task(conn: sqlite3.Connection, data: TaskCreate) -> dict:
         conn.execute(
             """
             INSERT INTO tasks
-              (id, title, project, notes, deadline_date, deadline_min, done,
-               done_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+              (id, user_id, title, project, notes, deadline_date, deadline_min,
+               done, done_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
             """,
             (
                 task_id,
+                user_id,
                 data.title,
                 data.project or None,
                 data.notes,
@@ -97,11 +102,13 @@ def create_task(conn: sqlite3.Connection, data: TaskCreate) -> dict:
                 now,
             ),
         )
-    return get_task(conn, task_id)
+    return get_task(conn, user_id, task_id)
 
 
-def update_task(conn: sqlite3.Connection, task_id: str, data: TaskUpdate) -> dict:
-    row = _get_row(conn, task_id)
+def update_task(
+    conn: sqlite3.Connection, user_id: str, task_id: str, data: TaskUpdate
+) -> dict:
+    row = _get_row(conn, user_id, task_id)
     fields = data.model_dump(exclude_unset=True)
     if not fields:
         return _row_to_task(row)
@@ -137,7 +144,7 @@ def update_task(conn: sqlite3.Connection, task_id: str, data: TaskUpdate) -> dic
             UPDATE tasks
                SET title = ?, project = ?, notes = ?, deadline_date = ?,
                    deadline_min = ?, done = ?, done_at = ?, updated_at = ?
-             WHERE id = ?
+             WHERE id = ? AND user_id = ?
             """,
             (
                 fields.get("title", row["title"]),
@@ -149,16 +156,19 @@ def update_task(conn: sqlite3.Connection, task_id: str, data: TaskUpdate) -> dic
                 done_at,
                 now_iso(),
                 task_id,
+                user_id,
             ),
         )
-    return get_task(conn, task_id)
+    return get_task(conn, user_id, task_id)
 
 
-def set_done(conn: sqlite3.Connection, task_id: str, done: bool = True) -> dict:
-    return update_task(conn, task_id, TaskUpdate(done=done))
+def set_done(
+    conn: sqlite3.Connection, user_id: str, task_id: str, done: bool = True
+) -> dict:
+    return update_task(conn, user_id, task_id, TaskUpdate(done=done))
 
 
-def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
-    _get_row(conn, task_id)
+def delete_task(conn: sqlite3.Connection, user_id: str, task_id: str) -> None:
+    _get_row(conn, user_id, task_id)
     with conn:
-        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        conn.execute("DELETE FROM tasks WHERE id = ? AND user_id = ?", (task_id, user_id))

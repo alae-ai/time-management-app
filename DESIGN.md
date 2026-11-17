@@ -1,11 +1,12 @@
-# Time Management App — System Design (v0.2)
+# Time Management App — System Design (v0.3)
 
-> Status: M1–M2 implemented (backend, SQLite, free-slot engine, CLI, calendar UI, tests).
-> M3 (MCP server + OpenCode workflow) is next. Remaining for M4: LLM base URL/model details.
+> Status: M1–M2 plus multi-user authentication implemented (backend, SQLite, free-slot
+> engine, CLI, calendar UI, tests). M3 (MCP server + OpenCode workflow) is next.
+> Remaining for M4: LLM base URL/model details.
 
 ## 1. Goal
 
-A single-user, local-first time manager:
+A multi-user, local-first time manager:
 
 - Calendar grid with appointments and tasks.
 - Tasks (todos) have a checkbox and a deadline; the deadline day is visually highlighted.
@@ -15,7 +16,10 @@ A single-user, local-first time manager:
 - Typical flow: "I have a TP deadline on 02/12/2026, give me the free time I have to do that
   project" → the app computes real gaps → the user picks one → the app schedules it.
 
-Non-goals for v1: multi-user, cloud sync, mobile apps, recurring events, notifications,
+Each account has its own tasks, blocks, settings, and conversations. The first account
+is an administrator; admins create and deactivate the other accounts.
+
+Non-goals for v1: cloud sync, mobile apps, recurring events, notifications,
 drag-and-drop rescheduling.
 
 ---
@@ -36,12 +40,12 @@ stored data in agreement, and makes free-time results reproducible and testable.
 
 ```
                     ┌──────────────────────┐
-  OpenCode (me) ───>│ tm CLI / MCP server  │──┐
+  OpenCode (me) ───>│ tm CLI / MCP server  │──┐  Bearer token
                     └──────────────────────┘  │
                                               │  HTTP (single writer)
   In-app chat panel ──> /api/chat ──┐         v
   Calendar UI ──────────────────────┴──> FastAPI service layer ──> SQLite (truth)
-                    ▲                        │
+                    ▲                        │  session cookie
                     └──── /api/state ────────┘
 ```
 
@@ -52,6 +56,10 @@ Decision log:
 | Backend | Python 3.13 + FastAPI + stdlib `sqlite3` |
 | Frontend | React + TypeScript + Vite |
 | Storage | SQLite |
+| Auth | Email + password; first-run admin; admin-created accounts |
+| Browser sessions | HttpOnly, SameSite=Lax cookie, hashed server-side |
+| CLI/agent auth | Personal API bearer tokens (`TM_API_TOKEN`) |
+| Tenant isolation | Explicit `user_id` filter on every query |
 | Agent bridges | REST + `tm` CLI **and** an MCP server |
 | Chat surfaces | This OpenCode chat **and** an in-app chat panel |
 | Free-time window | Editable in Settings; default 08:00–22:00 |
@@ -62,13 +70,39 @@ Decision log:
 ## 3. Data model
 
 Two scheduling tables (a task can have several work sessions; a deadline is not a block),
-plus two tables for the in-app chat.
+plus auth tables and two tables for the in-app chat. Every user-owned row carries a
+`user_id`; services must pass the authenticated user's id into every query.
+
+### `users` — accounts
+
+| column | type | notes |
+|---|---|---|
+| `id` | TEXT PK | UUID |
+| `email` | TEXT NOT NULL UNIQUE COLLATE NOCASE | login identifier |
+| `name` | TEXT NOT NULL DEFAULT '' | display name |
+| `password_hash` | TEXT NOT NULL | scrypt (PBKDF2 fallback), never plaintext |
+| `is_admin` | INTEGER NOT NULL DEFAULT 0 | may create/manage accounts |
+| `is_active` | INTEGER NOT NULL DEFAULT 1 | deactivated users cannot log in |
+| `created_at`, `updated_at` | TEXT NOT NULL | ISO timestamps |
+| `last_login_at` | TEXT NULL | |
+
+### `sessions` — browser logins
+
+The raw session token is stored only in the HttpOnly cookie. SQLite stores its SHA-256
+hash, the owner, expiry, and optional user-agent/IP metadata. Expired sessions are
+deleted on new logins.
+
+### `api_tokens` — CLI/agent credentials
+
+Personal bearer tokens created in the web UI. The raw token is shown once; SQLite stores
+only its SHA-256 hash. Tokens are scoped to their user and can be revoked at any time.
 
 ### `tasks` — todos with deadline and checkbox
 
 | column | type | notes |
 |---|---|---|
 | `id` | TEXT PK | UUID |
+| `user_id` | TEXT NOT NULL | FK → users, owner |
 | `title` | TEXT NOT NULL | e.g. "TP report" |
 | `project` | TEXT NULL | grouping, e.g. "TP", "Project X" |
 | `notes` | TEXT NOT NULL DEFAULT '' | |
@@ -83,6 +117,7 @@ plus two tables for the in-app chat.
 | column | type | notes |
 |---|---|---|
 | `id` | TEXT PK | UUID |
+| `user_id` | TEXT NOT NULL | FK → users, owner |
 | `title` | TEXT NOT NULL | |
 | `kind` | TEXT NOT NULL | `appointment` or `session` |
 | `task_id` | TEXT NULL | FK → tasks; required for `session` |
@@ -97,6 +132,7 @@ plus two tables for the in-app chat.
 ```sql
 CREATE TABLE conversations (
   id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title      TEXT NOT NULL DEFAULT 'New chat',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -120,8 +156,10 @@ Key-value table, validated on write, seeded with defaults on first boot. No secr
 
 ```sql
 CREATE TABLE app_settings (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key     TEXT NOT NULL,
+  value   TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)
 );
 ```
 
@@ -139,6 +177,7 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE tasks (
   id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title         TEXT NOT NULL,
   project       TEXT,
   notes         TEXT NOT NULL DEFAULT '',
@@ -155,6 +194,7 @@ CREATE TABLE tasks (
 
 CREATE TABLE blocks (
   id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title      TEXT NOT NULL,
   kind       TEXT NOT NULL CHECK (kind IN ('appointment','session')),
   task_id    TEXT REFERENCES tasks(id) ON DELETE CASCADE,
@@ -170,17 +210,36 @@ CREATE TABLE blocks (
   CHECK (kind = 'session' OR task_id IS NULL)
 );
 
-CREATE INDEX idx_blocks_date ON blocks(date);
-CREATE INDEX idx_blocks_task ON blocks(task_id);
-CREATE INDEX idx_tasks_deadline ON tasks(deadline_date);
+CREATE INDEX idx_blocks_user_date ON blocks(user_id, date);
+CREATE INDEX idx_blocks_user_task ON blocks(user_id, task_id);
+CREATE INDEX idx_tasks_user_deadline ON tasks(user_id, deadline_date);
 ```
 
 Date/time rules:
 
 - Store dates `YYYY-MM-DD`; times as **minutes from midnight** (integers).
-- No UTC conversion (single-user wall-clock app). Display/input is `DD/MM/YYYY`, `HH:MM`.
+- No UTC conversion (wall-clock app per user). Display/input is `DD/MM/YYYY`, `HH:MM`.
 - API, CLI, MCP, and chat tools accept both `DD/MM/YYYY` and `YYYY-MM-DD`, normalize to ISO.
 - Cross-midnight blocks are rejected in v1.
+
+### Authentication and tenant isolation
+
+- `POST /api/auth/setup` is available only while no real user exists. It creates the
+  first account with `is_admin=1`, claims rows owned by the temporary `legacy-user`
+  migration owner, and opens a browser session.
+- Passwords are hashed with `hashlib.scrypt` (PBKDF2 fallback), never stored or logged.
+- Browser sessions use an HttpOnly, SameSite=Lax cookie. Set `TM_COOKIE_SECURE=1` behind
+  HTTPS. Raw session tokens are not stored in SQLite; only SHA-256 hashes are.
+- `POST /api/auth/login` and `POST /api/auth/logout` manage the cookie.
+- `Authorization: Bearer <token>` (or `X-API-Key`) authenticates CLI/agent requests with
+  a personal API token. API tokens are created in the web UI and shown once.
+- Admin-only routes under `/api/admin/users` list, create, deactivate, promote, demote,
+  and reset passwords. The system refuses to remove the last active admin.
+- Every service function takes the authenticated `user_id` and filters by it. A task or
+  block belonging to another user is reported as `404`, not leaked.
+- `TM_SETUP_TOKEN` optionally protects first-run setup. Once an admin exists, setup
+  returns `409`.
+- CORS allows the local Vite origin and `TM_PUBLIC_ORIGIN`, with credentials enabled.
 
 ---
 
@@ -251,8 +310,17 @@ Write-time checks (before the insert/update transaction):
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | `{ ok, now, version, llm_configured }` |
-| GET | `/api/state?from&to` | tasks + blocks + settings for the calendar |
+| GET | `/api/health` | public `{ ok, now, version, llm_configured }` |
+| GET | `/api/auth/session` | login state + whether setup is required |
+| POST | `/api/auth/setup` | create the first admin and claim legacy data |
+| POST | `/api/auth/login` / `/api/auth/logout` | browser session |
+| GET | `/api/auth/me` | current account |
+| POST | `/api/auth/password` | change own password |
+| GET/POST | `/api/auth/tokens` | list / create personal API tokens |
+| DELETE | `/api/auth/tokens/:id` | revoke a token |
+| GET/POST | `/api/admin/users` | list / create accounts (admin) |
+| PATCH | `/api/admin/users/:id` | role, active state, password (admin) |
+| GET | `/api/state?from&to` | the current user's tasks + blocks + settings |
 | GET | `/api/settings` | calendar/scheduling preferences |
 | PATCH | `/api/settings` | partial update, validated |
 | GET | `/api/tasks?status=open&project=` | list / backlog |
@@ -264,14 +332,15 @@ Write-time checks (before the insert/update transaction):
 | DELETE | `/api/blocks/:id` | |
 | GET | `/api/free-slots` | params from §4 |
 | POST | `/api/tasks/:id/sessions` | schedule a session (date + start/end or all-day) |
-| GET | `/api/export` | JSON dump |
+| GET | `/api/export` | JSON dump for the current user |
+| POST | `/api/import` | import an export into the current user |
 | POST | `/api/chat` | in-app agent, SSE stream |
 | GET | `/api/conversations` | list |
 | GET | `/api/conversations/:id/messages` | history |
 | DELETE | `/api/conversations/:id` | delete |
 
-Errors: `{ error: { code, message, details? } }`; `400` validation, `404` not found,
-`409` conflict, `503` LLM not configured.
+Errors: `{ error: { code, message, details? } }`; `400` validation, `401` unauthenticated,
+`403` forbidden, `404` not found, `409` conflict, `503` LLM not configured.
 
 ---
 
@@ -279,9 +348,11 @@ Errors: `{ error: { code, message, details? } }`; `400` validation, `404` not fo
 
 ### 6.1 `tm` CLI (used by this OpenCode chat)
 
-Python console script in the venv; calls the HTTP API.
+Python console script in the venv; calls the HTTP API. Set `TM_API_TOKEN` to a personal
+API token created in the web UI. Without it, protected commands return `401`.
 
 ```
+tm whoami
 tm health
 tm state    --from 2026-11-11 --to 2026-12-02
 tm settings [--json]
@@ -426,9 +497,11 @@ No drag-and-drop in v1.
   numbered SQL files.
 - Daily `VACUUM INTO 'data/backups/tm-YYYY-MM-DD.db'` (keep 14) on boot and on a timer;
   `GET /api/export` for a portable JSON dump.
-- Single writer process: CLI/MCP go through HTTP, chat runs inside FastAPI.
-- Bind `127.0.0.1`; no auth; CORS only for the dev origin. `.env` and `data/` gitignored.
-- Dev seed script (`python -m tm.seed`).
+- Single writer process: CLI/MCP go through HTTP with bearer tokens, chat runs inside
+  FastAPI, and the browser uses a session cookie.
+- Bind `127.0.0.1` by default; in Docker, `TM_HOST=0.0.0.0` behind Dokploy. CORS allows
+  the dev origin and `TM_PUBLIC_ORIGIN`. `.env` and `data/` are gitignored.
+- Dev seed script (`python -m tm.seed`) seeds one account; pass `--email` to choose it.
 
 Runtime preferences live in `app_settings` (no JSON config file). Defaults are inserted on
 first boot and edited from the UI or `PATCH /api/settings`. The free-slot engine reads them

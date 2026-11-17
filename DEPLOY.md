@@ -3,12 +3,12 @@
 The image is a multi-stage build: Node builds the React app, then Python serves the API
 and the built UI from one container. SQLite lives in the `tm_data` named volume.
 
-Target domain: **https://todo.naoufalelouahabi.com**
+Target domain: **https://calendar.naoufalelouahabi.com**
 
 ## 1. DNS
 
 Create an `A` record (and `AAAA` if you use IPv6) for
-`todo.naoufalelouahabi.com` pointing at the Dokploy server.
+`calendar.naoufalelouahabi.com` pointing at the Dokploy server.
 
 ## 2. Create the Dokploy application
 
@@ -26,6 +26,12 @@ Create an `A` record (and `AAAA` if you use IPv6) for
    TM_API_URL=http://127.0.0.1:4317
    TZ=Africa/Casablanca
 
+   # Authentication. Generate the setup token with: openssl rand -hex 24
+   TM_SESSION_DAYS=30
+   TM_COOKIE_SECURE=1
+   TM_SETUP_TOKEN=replace-with-a-random-secret
+   TM_PUBLIC_ORIGIN=https://calendar.naoufalelouahabi.com
+
    # Optional: only for the in-app chat.
    TM_LLM_BASE_URL=https://api.openai.com/v1
    TM_LLM_API_KEY=sk-...
@@ -42,13 +48,22 @@ Create an `A` record (and `AAAA` if you use IPv6) for
 
    | Field | Value |
    |---|---|
-   | Host | `todo.naoufalelouahabi.com` |
+   | Host | `calendar.naoufalelouahabi.com` |
    | Service | `tm` |
    | Container port | `4317` |
    | HTTPS | enabled (Let's Encrypt) |
 
 5. Deploy. Dokploy injects the Traefik labels and network config. The compose file uses
    `expose`, not a host port, so the container is only reached through Dokploy's proxy.
+
+6. Open <https://calendar.naoufalelouahabi.com>. On the first run the app shows **Create
+   the administrator account**. Enter your email, a password of at least 10 characters,
+   and the `TM_SETUP_TOKEN` value. This account becomes the administrator and claims any
+   calendar data that existed before authentication was enabled.
+
+7. After the admin account exists, you can remove `TM_SETUP_TOKEN` from Dokploy's
+   environment and redeploy. The setup endpoint is disabled once a real account exists.
+   Create accounts for other people from **Users** in the top bar.
 
 ## 3. Environment variables
 
@@ -64,6 +79,11 @@ The application reads these variables (`tm/config.py`):
 | `TM_LLM_BASE_URL` | OpenAI-compatible chat base URL | empty |
 | `TM_LLM_API_KEY` | Chat API key (keep this secret) | empty |
 | `TM_LLM_MODEL` | Chat model name | empty |
+| `TM_SESSION_DAYS` | Browser session lifetime in days | `30` |
+| `TM_COOKIE_SECURE` | Send the session cookie only over HTTPS | `1` in production |
+| `TM_SETUP_TOKEN` | Required on the first-run admin setup screen | random secret |
+| `TM_PUBLIC_ORIGIN` | Public origin allowed by CORS | `https://calendar.naoufalelouahabi.com` |
+| `TM_API_TOKEN` | Optional token for the `tm` CLI inside the container | create in the UI |
 | `TZ` | Container timezone (not read by Python config directly) | e.g. `Africa/Casablanca` |
 
 The compose file uses the short `environment: [NAME]` form. Compose resolves each name
@@ -90,18 +110,36 @@ uncomment the `ports` section in `docker-compose.yml` and use
 
 - Database: `/app/data/tm.db` inside the `tm_data` volume.
 - The volume survives redeploys. Use Dokploy's named-volume backup feature, or export
-  JSON with:
+  JSON with a personal API token:
 
   ```bash
-  curl https://todo.naoufalelouahabi.com/api/export > backup.json
+  export TM_API_TOKEN="tm_..."
+  curl -H "Authorization: Bearer $TM_API_TOKEN" \
+    https://calendar.naoufalelouahabi.com/api/export > backup.json
   ```
+
+- To restore an export into the signed-in account:
+
+  ```bash
+  curl -H "Authorization: Bearer $TM_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -X POST https://calendar.naoufalelouahabi.com/api/import \
+    --data-binary @backup.json
+  ```
+
+  Add `"replace": true` to the JSON body only when you want to replace that account's
+  existing tasks and blocks. Other accounts are never touched.
 
 - To inspect the DB from the container:
 
   ```bash
   docker compose exec tm ls -l /app/data
+  docker compose exec tm tm whoami
   docker compose exec tm tm state --json
   ```
+
+  For the in-container CLI, set `TM_API_TOKEN` in Dokploy's environment (or use
+  `docker compose exec -e TM_API_TOKEN=...`).
 
 ## Dokploy CLI authentication
 
@@ -120,8 +158,12 @@ dokploy overview
 
 This avoids writing into `/usr/local/lib/node_modules` entirely.
 
-## Security note
+## Security notes
 
-This is a single-user local-first app with **no authentication**. A public domain
-exposes both the calendar and its write API. Put Dokploy/Traefik basic auth (or another
-access-control middleware) in front of the domain, or keep it on a private network.
+- Every API route except `/api/health` and the auth/session endpoints requires a login
+  cookie or a personal API token.
+- Set `TM_COOKIE_SECURE=1` behind HTTPS and keep `TM_SETUP_TOKEN` secret during first-run
+  setup. Remove the setup token after the administrator account exists.
+- API tokens are shown once. Revoke any token you no longer use from **API tokens** in
+  the web UI.
+- SQLite is a single file: back up the `tm_data` volume before major upgrades.

@@ -1,4 +1,4 @@
-"""Blocks: appointments and scheduled work sessions."""
+"""Blocks: appointments and scheduled work sessions, scoped to one user."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from tm.services.tasks import get_task
 BLOCK_SELECT = """
 SELECT b.*, t.title AS task_title, t.project AS task_project, t.done AS task_done
 FROM blocks b
-LEFT JOIN tasks t ON t.id = b.task_id
+LEFT JOIN tasks t ON t.id = b.task_id AND t.user_id = b.user_id
 """
 
 
@@ -45,25 +45,30 @@ def _row_to_block(row: sqlite3.Row) -> dict:
     }
 
 
-def _get_row(conn: sqlite3.Connection, block_id: str) -> sqlite3.Row:
-    row = conn.execute(f"{BLOCK_SELECT} WHERE b.id = ?", (block_id,)).fetchone()
+def _get_row(conn: sqlite3.Connection, user_id: str, block_id: str) -> sqlite3.Row:
+    row = conn.execute(
+        f"{BLOCK_SELECT} WHERE b.id = ? AND b.user_id = ?",
+        (block_id, user_id),
+    ).fetchone()
     if row is None:
         raise not_found("block", block_id)
     return row
 
 
-def get_block(conn: sqlite3.Connection, block_id: str) -> dict:
-    return _row_to_block(_get_row(conn, block_id))
+def get_block(conn: sqlite3.Connection, user_id: str, block_id: str) -> dict:
+    return _row_to_block(_get_row(conn, user_id, block_id))
 
 
-def list_blocks(conn: sqlite3.Connection, from_date: str, to_date: str) -> list[dict]:
+def list_blocks(
+    conn: sqlite3.Connection, user_id: str, from_date: str, to_date: str
+) -> list[dict]:
     rows = conn.execute(
         f"""
         {BLOCK_SELECT}
-        WHERE b.date BETWEEN ? AND ?
+        WHERE b.user_id = ? AND b.date BETWEEN ? AND ?
         ORDER BY b.date, COALESCE(b.start_min, -1), b.created_at
         """,
-        (from_date, to_date),
+        (user_id, from_date, to_date),
     ).fetchall()
     return [_row_to_block(row) for row in rows]
 
@@ -76,6 +81,7 @@ def _span(start_min: int | None, end_min: int | None) -> tuple[int, int]:
 
 def _validate_block_time(
     conn: sqlite3.Connection,
+    user_id: str,
     date: str,
     start_min: int | None,
     end_min: int | None,
@@ -85,7 +91,7 @@ def _validate_block_time(
     All-day blocks are day-level markers: they may be added for today even though part
     of the day has passed, but never for a past date.
     """
-    settings = get_settings(conn)
+    settings = get_settings(conn, user_id)
     block_date = parse_date(date)
     today_date = today()
     if block_date < today_date:
@@ -116,6 +122,7 @@ def _validate_block_time(
 
 def find_conflicts(
     conn: sqlite3.Connection,
+    user_id: str,
     date: str,
     start_min: int | None,
     end_min: int | None,
@@ -125,8 +132,12 @@ def find_conflicts(
 ) -> list[dict]:
     new_start, new_end = _span(start_min, end_min)
     rows = conn.execute(
-        f"{BLOCK_SELECT} WHERE b.date = ? ORDER BY COALESCE(b.start_min, -1)",
-        (date,),
+        f"""
+        {BLOCK_SELECT}
+        WHERE b.user_id = ? AND b.date = ?
+        ORDER BY COALESCE(b.start_min, -1)
+        """,
+        (user_id, date),
     ).fetchall()
 
     conflicts: list[dict] = []
@@ -143,6 +154,7 @@ def find_conflicts(
 
 def _insert_block(
     conn: sqlite3.Connection,
+    user_id: str,
     *,
     title: str,
     kind: str,
@@ -153,9 +165,9 @@ def _insert_block(
     notes: str,
     allow_overlap: bool,
 ) -> dict:
-    _validate_block_time(conn, date, start_min, end_min)
+    _validate_block_time(conn, user_id, date, start_min, end_min)
 
-    conflicts = find_conflicts(conn, date, start_min, end_min)
+    conflicts = find_conflicts(conn, user_id, date, start_min, end_min)
     if conflicts and not allow_overlap:
         raise AppError(
             409,
@@ -170,12 +182,13 @@ def _insert_block(
         conn.execute(
             """
             INSERT INTO blocks
-              (id, title, kind, task_id, date, start_min, end_min, notes,
+              (id, user_id, title, kind, task_id, date, start_min, end_min, notes,
                created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 block_id,
+                user_id,
                 title,
                 kind,
                 task_id,
@@ -187,18 +200,19 @@ def _insert_block(
                 now,
             ),
         )
-    return get_block(conn, block_id)
+    return get_block(conn, user_id, block_id)
 
 
-def create_block(conn: sqlite3.Connection, data: BlockCreate) -> dict:
+def create_block(conn: sqlite3.Connection, user_id: str, data: BlockCreate) -> dict:
     if data.kind == "session":
-        get_task(conn, data.task_id)  # 404 if missing
+        get_task(conn, user_id, data.task_id)  # 404 if missing or another user's
     start_min = parse_time_min(data.start) if data.start is not None else None
     end_min = (
         parse_time_min(data.end, allow_end_of_day=True) if data.end is not None else None
     )
     return _insert_block(
         conn,
+        user_id,
         title=data.title,
         kind=data.kind,
         task_id=data.task_id,
@@ -211,9 +225,9 @@ def create_block(conn: sqlite3.Connection, data: BlockCreate) -> dict:
 
 
 def create_session(
-    conn: sqlite3.Connection, task_id: str, data: SessionCreate
+    conn: sqlite3.Connection, user_id: str, task_id: str, data: SessionCreate
 ) -> dict:
-    task = get_task(conn, task_id)
+    task = get_task(conn, user_id, task_id)
     start_min = (
         parse_time_min(data.start)
         if data.start is not None and not data.all_day
@@ -226,6 +240,7 @@ def create_session(
     )
     return _insert_block(
         conn,
+        user_id,
         title=task["title"],
         kind="session",
         task_id=task_id,
@@ -237,8 +252,10 @@ def create_session(
     )
 
 
-def update_block(conn: sqlite3.Connection, block_id: str, data: BlockUpdate) -> dict:
-    row = _get_row(conn, block_id)
+def update_block(
+    conn: sqlite3.Connection, user_id: str, block_id: str, data: BlockUpdate
+) -> dict:
+    row = _get_row(conn, user_id, block_id)
     fields = data.model_dump(exclude_unset=True)
     if not fields:
         return _row_to_block(row)
@@ -272,9 +289,9 @@ def update_block(conn: sqlite3.Connection, block_id: str, data: BlockUpdate) -> 
         date != row["date"] or start != existing_start or end != existing_end
     )
     if schedule_changed:
-        _validate_block_time(conn, date, start_min, end_min)
+        _validate_block_time(conn, user_id, date, start_min, end_min)
         conflicts = find_conflicts(
-            conn, date, start_min, end_min, exclude_block_id=block_id
+            conn, user_id, date, start_min, end_min, exclude_block_id=block_id
         )
         if conflicts and not data.allow_overlap:
             raise AppError(
@@ -290,7 +307,7 @@ def update_block(conn: sqlite3.Connection, block_id: str, data: BlockUpdate) -> 
             UPDATE blocks
                SET title = ?, date = ?, start_min = ?, end_min = ?, notes = ?,
                    updated_at = ?
-             WHERE id = ?
+             WHERE id = ? AND user_id = ?
             """,
             (
                 fields.get("title", row["title"]),
@@ -300,12 +317,15 @@ def update_block(conn: sqlite3.Connection, block_id: str, data: BlockUpdate) -> 
                 fields.get("notes", row["notes"]) or "",
                 now_iso(),
                 block_id,
+                user_id,
             ),
         )
-    return get_block(conn, block_id)
+    return get_block(conn, user_id, block_id)
 
 
-def delete_block(conn: sqlite3.Connection, block_id: str) -> None:
-    _get_row(conn, block_id)
+def delete_block(conn: sqlite3.Connection, user_id: str, block_id: str) -> None:
+    _get_row(conn, user_id, block_id)
     with conn:
-        conn.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
+        conn.execute(
+            "DELETE FROM blocks WHERE id = ? AND user_id = ?", (block_id, user_id)
+        )

@@ -1,3 +1,32 @@
+export type User = {
+  id: string;
+  email: string;
+  name: string;
+  is_admin: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_login_at: string | null;
+};
+
+export type AuthSession = {
+  authenticated: boolean;
+  setup_required: boolean;
+  user: User | null;
+};
+
+export type ApiToken = {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+};
+
+export type ApiTokenCreated = ApiToken & {
+  token: string;
+};
+
 export type Settings = {
   day_start: string;
   day_end: string;

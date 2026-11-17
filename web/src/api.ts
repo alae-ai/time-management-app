@@ -1,5 +1,8 @@
 import type {
   ApiErrorPayload,
+  ApiToken,
+  ApiTokenCreated,
+  AuthSession,
   Block,
   BlockInput,
   BlockPatch,
@@ -11,6 +14,7 @@ import type {
   Task,
   TaskInput,
   TaskPatch,
+  User,
 } from "./types";
 
 const BASE = "/api";
@@ -32,6 +36,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
@@ -118,6 +123,75 @@ export const api = {
 
   updateSettings(input: SettingsInput): Promise<Settings> {
     return request<Settings>("/settings", json("PATCH", input));
+  },
+
+  getSession(): Promise<AuthSession> {
+    return request<AuthSession>("/auth/session");
+  },
+
+  setup(input: {
+    email: string;
+    name?: string;
+    password: string;
+    setup_token?: string;
+  }): Promise<AuthSession> {
+    return request<AuthSession>("/auth/setup", json("POST", input));
+  },
+
+  login(input: { email: string; password: string }): Promise<AuthSession> {
+    return request<AuthSession>("/auth/login", json("POST", input));
+  },
+
+  logout(): Promise<void> {
+    return request<void>("/auth/logout", { method: "POST" });
+  },
+
+  getMe(): Promise<User> {
+    return request<User>("/auth/me");
+  },
+
+  changePassword(input: {
+    current_password: string;
+    new_password: string;
+  }): Promise<void> {
+    return request<void>("/auth/password", json("POST", input));
+  },
+
+  listTokens(): Promise<ApiToken[]> {
+    return request<ApiToken[]>("/auth/tokens");
+  },
+
+  createToken(name: string): Promise<ApiTokenCreated> {
+    return request<ApiTokenCreated>("/auth/tokens", json("POST", { name }));
+  },
+
+  revokeToken(id: string): Promise<void> {
+    return request<void>(`/auth/tokens/${id}`, { method: "DELETE" });
+  },
+
+  listUsers(): Promise<User[]> {
+    return request<User[]>("/admin/users");
+  },
+
+  createUser(input: {
+    email: string;
+    name?: string;
+    password: string;
+    is_admin?: boolean;
+  }): Promise<User> {
+    return request<User>("/admin/users", json("POST", input));
+  },
+
+  updateUser(
+    id: string,
+    input: {
+      name?: string;
+      is_admin?: boolean;
+      is_active?: boolean;
+      password?: string;
+    },
+  ): Promise<User> {
+    return request<User>(`/admin/users/${id}`, json("PATCH", input));
   },
 };
 

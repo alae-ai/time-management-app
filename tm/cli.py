@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import typer
 
-from tm.config import API_URL, HOST, PORT
+from tm.config import API_TOKEN, API_URL, HOST, PORT
 from tm.dates import fmt_date, fmt_duration, parse_date, today
 
 app = typer.Typer(
@@ -46,8 +46,11 @@ def _request(
     params: dict[str, Any] | None = None,
 ) -> httpx.Response:
     url = f"{API_URL.rstrip('/')}{path}"
+    headers = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else None
     try:
-        return httpx.request(method, url, json=body, params=params, timeout=20)
+        return httpx.request(
+            method, url, json=body, params=params, headers=headers, timeout=20
+        )
     except httpx.HTTPError as exc:
         typer.secho(
             f"Cannot reach the app at {API_URL}. Start it with `tm serve` or `scripts/dev.sh`.",
@@ -78,6 +81,12 @@ def _call(
             details = error.get("details")
         except ValueError:
             pass
+        if response.status_code == 401 and not API_TOKEN:
+            typer.secho(
+                "Not authenticated. Set TM_API_TOKEN to a personal API token from the web UI.",
+                fg="red",
+                err=True,
+            )
         typer.secho(f"Error ({response.status_code}): {message}", fg="red", err=True)
         if details:
             typer.echo(json.dumps(details, indent=2), err=True)
@@ -134,6 +143,17 @@ def health(as_json: bool = typer.Option(False, "--json")) -> None:
     else:
         typer.echo(f"ok · v{data['version']} · {data['now']}")
         typer.echo(f"llm configured: {'yes' if data['llm_configured'] else 'no'}")
+
+
+@app.command()
+def whoami(as_json: bool = typer.Option(False, "--json")) -> None:
+    """Show the account associated with TM_API_TOKEN."""
+    data = _call("GET", "/api/auth/me")
+    if as_json:
+        _print_json(data)
+        return
+    role = "admin" if data["is_admin"] else "user"
+    typer.echo(f"{data['email']} ({role})")
 
 
 @app.command()

@@ -1,4 +1,4 @@
-"""Settings stored in ``app_settings``."""
+"""Settings stored in ``app_settings``, scoped to a user."""
 
 from __future__ import annotations
 
@@ -30,17 +30,30 @@ DB_KEYS: dict[str, str] = {
 }
 
 
-def seed_defaults(conn: sqlite3.Connection) -> None:
+def seed_defaults(conn: sqlite3.Connection, user_id: str) -> None:
     for key, value in DEFAULTS.items():
         conn.execute(
-            "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
-            (key, value),
+            """
+            INSERT OR IGNORE INTO app_settings (user_id, key, value)
+            VALUES (?, ?, ?)
+            """,
+            (user_id, key, value),
         )
     conn.commit()
 
 
-def get_settings(conn: sqlite3.Connection) -> Settings:
-    rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+def get_settings(conn: sqlite3.Connection, user_id: str) -> Settings:
+    rows = conn.execute(
+        "SELECT key, value FROM app_settings WHERE user_id = ?",
+        (user_id,),
+    ).fetchall()
+    if not rows:
+        seed_defaults(conn, user_id)
+        rows = conn.execute(
+            "SELECT key, value FROM app_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+
     raw = {row["key"]: row["value"] for row in rows}
     data: dict[str, object] = {}
     for field, key in DB_KEYS.items():
@@ -49,8 +62,10 @@ def get_settings(conn: sqlite3.Connection) -> Settings:
     return Settings(**data)
 
 
-def update_settings(conn: sqlite3.Connection, patch: SettingsUpdate) -> Settings:
-    current = get_settings(conn).model_dump()
+def update_settings(
+    conn: sqlite3.Connection, user_id: str, patch: SettingsUpdate
+) -> Settings:
+    current = get_settings(conn, user_id).model_dump()
     changes = patch.model_dump(exclude_unset=True)
     merged = {**current, **changes}
     try:
@@ -62,9 +77,9 @@ def update_settings(conn: sqlite3.Connection, patch: SettingsUpdate) -> Settings
         for field, key in DB_KEYS.items():
             conn.execute(
                 """
-                INSERT INTO app_settings (key, value) VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                INSERT INTO app_settings (user_id, key, value) VALUES (?, ?, ?)
+                ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
                 """,
-                (key, str(getattr(updated, field))),
+                (user_id, key, str(getattr(updated, field))),
             )
     return updated
